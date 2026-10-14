@@ -259,3 +259,71 @@ def test_unreadable_config(tmp_path):
 def test_custom_named_capture(tmp_path):
     config = load_config(write_config(tmp_path, {"license_key": make_key("TESTUSER"), "custom_rules": [{"name": "named", "regex": r"NAME=(?P<secret>[A-Z0-9]+)"}]}))
     assert scan_text("NAME=ABCDEF123456789", config=config)[0].snippet.startswith("ABC")
+
+@pytest.mark.parametrize("allow", [{"allow_strings": [MIX]}, {"allow_patterns": ["high-entropy-string"]}])
+def test_entropy_allowlist(allow):
+    assert not scan_text('"' + MIX + '"', config=Config(**allow))
+
+
+def test_optional_custom_capture():
+    from secretsweep.rules import rule
+    config = Config(rules=(rule("optional", r"PREFIX(?P<secret>ABC)?"),))
+    assert not scan_text("PREFIX", config=config)
+
+
+def test_diff_no_newline_marker():
+    token = POSITIVE["github-token"]
+    diff = f"--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+{token}\n\\ No newline at end of file"
+    assert len(scan_stdin(diff)) == 1
+
+
+def test_tree_allowlist_prunes(tmp_path):
+    (tmp_path / "fixture").mkdir()
+    (tmp_path / "fixture" / "a").write_text(POSITIVE["github-token"])
+    assert scan_path(tmp_path, Config(allow_files=["fixture"])) == ([], 0, 1)
+
+
+def test_cli_valid_threshold(tmp_path, capsys):
+    (tmp_path / "a").write_text('"' + MIX + '"')
+    assert main(["scan", str(tmp_path), "--entropy-threshold", "6"]) == 0
+    assert "0 findings" in capsys.readouterr().out
+
+
+def test_invalid_custom_expression(tmp_path):
+    with pytest.raises(ValueError):
+        load_config(write_config(tmp_path, {"license_key": make_key("TESTUSER"), "custom_rules": [{"name": "custom", "regex": 123}]}))
+
+
+def test_io_failure_is_safe(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "a"
+    path.write_text("okay")
+    def fail(*args, **kwargs):
+        raise PermissionError("sensitive-content")
+    monkeypatch.setattr(Path, "read_bytes", fail)
+    assert main(["scan", str(path)]) == 2
+    output = capsys.readouterr()
+    assert "sensitive-content" not in output.err
+    assert not output.out
+
+
+def test_no_network(tmp_path, monkeypatch):
+    import socket
+    def fail(*args, **kwargs):
+        raise AssertionError("Network access forbidden")
+    monkeypatch.setattr(socket, "socket", fail)
+    monkeypatch.setattr(socket, "create_connection", fail)
+    (tmp_path / "a").write_text(POSITIVE["github-token"])
+    assert main(["scan", str(tmp_path)]) == 1
+
+
+def test_symlinks_are_skipped(tmp_path):
+    source = tmp_path / "source"
+    source.write_text(POSITIVE["github-token"])
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(source)
+    except OSError:
+        pytest.skip("OS does not grant symlink creation")
+    assert scan_path(tmp_path, Config())[1:] == (1, 1)
+    with pytest.raises(ValueError):
+        scan_path(link, Config())
