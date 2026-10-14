@@ -51,6 +51,8 @@ Only the first/last three characters of a value are shown; values shorter than 1
 
 JWTs are MEDIUM because public examples and non-secret JWTs are common. Patterns identify shapes, not active credentials. Private-key detection flags the header even if the block is incomplete, avoiding the need to retain or print the key body.
 
+Assignment names support underscore/digit-separated prefixes and suffixes, such as `DB_PASSWORD`, `MY_API_KEY` and `STRIPE_SECRET_KEY`, but reject embedded words such as `passwordless`. Quoted values require matching closing quotes. Unquoted values are supported only in `.env`, `.env.*`, `*.env` files and plain stdin, as complete `KEY=VALUE` lines (optional `export`, spacing and trailing whitespace-separated comments). Calls and other trailing expressions are rejected. Other file types require quoted assignment values to avoid flagging source-code references. Plain stdin treats standalone unquoted assignments as env data; use a source filename when that distinction matters.
+
 ### Generic entropy detection
 
 `high-entropy-string` (MEDIUM) scores single-line quoted strings using Shannon entropy in bits/character. The default threshold is **4.5**, with length **24–256**, and lowercase, uppercase and digits all required. Pure hexadecimal/hyphen strings (including normal hashes and UUIDs), URLs, data URIs and whitespace-containing values are excluded. These exclusions apply only to the entropy heuristic, not explicit fingerprints. Known-rule matches suppress overlapping entropy duplicates. `--entropy-threshold` changes the generic heuristic only; assignment-rule entropy floors stay fixed.

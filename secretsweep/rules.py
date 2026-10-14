@@ -8,22 +8,25 @@ class Rule:
     regex: re.Pattern
     severity: str = "HIGH"
     min_entropy: float = 0.0
+    env_assignment: bool = False
 
 
-def rule(name, expression, severity="HIGH", min_entropy=0.0):
-    return Rule(name, re.compile(expression), severity, min_entropy)
+def rule(name, expression, severity="HIGH", min_entropy=0.0, env_assignment=False):
+    return Rule(name, re.compile(expression), severity, min_entropy, env_assignment)
 
 
 def assignment(names, length):
-    return rf'''(?i)\b(?:{names})\b["']?\s*[:=]\s*["']?(?P<secret>[A-Za-z0-9_+/=.!@#$%^&*~-]{{{length},}})'''
+    # Match whole identifier components, including underscore/digit suffixes.
+    # A captured quote must close; an unquoted value must finish the line.
+    return rf'''(?i)(?<![A-Za-z])(?:{names})(?![A-Za-z])[A-Za-z0-9_]*["']?\s*[:=]\s*(?P<quote>["'])?(?P<secret>[A-Za-z0-9_+/=.!@#$%^&*~-]{{{length},}})(?(quote)(?P=quote)|(?=[ \t]*(?:[ \t]\#.*)?$))'''
 
 FREE_RULES = (
     rule("aws-access-key-id", r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
-    rule("aws-secret-key", assignment("aws_secret_access_key|aws_secret_key", 40), min_entropy=3.5),
-    rule("generic-api-key", assignment("api_key|apikey", 16), min_entropy=3.5),
-    rule("generic-secret", assignment("secret", 16), min_entropy=3.5),
-    rule("generic-token", assignment("token", 16), min_entropy=3.5),
-    rule("generic-password", assignment("password|passwd|pwd", 12), min_entropy=3.0),
+    rule("aws-secret-key", assignment("aws_secret_access_key|aws_secret_key", 40), min_entropy=3.5, env_assignment=True),
+    rule("generic-api-key", assignment("api_key|apikey", 16), min_entropy=3.5, env_assignment=True),
+    rule("generic-secret", assignment("secret", 16), min_entropy=3.5, env_assignment=True),
+    rule("generic-token", assignment("token", 16), min_entropy=3.5, env_assignment=True),
+    rule("generic-password", assignment("password|passwd|pwd", 12), min_entropy=3.0, env_assignment=True),
     rule("private-key", r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----"),
     rule("slack-token", r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
     rule("jwt", r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b", "MEDIUM"),

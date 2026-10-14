@@ -53,10 +53,20 @@ def scan_text(text, file="<stdin>", config=None, start_line=1):
     if file_allowed(file, config):
         return []
     findings = []
+    basename = file.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    env_input = (file == "<stdin>" or basename == ".env"
+                 or basename.startswith(".env.") or basename.endswith(".env"))
     for number, line in enumerate(text.splitlines(), start_line):
         occupied = []
         for rule in config.rules:
             for match in rule.regex.finditer(line):
+                if rule.env_assignment and match.group("quote") is None:
+                    # Bare identifiers are values in dotenv, but references in code.
+                    if not env_input or not re.fullmatch(
+                        r"[ \t]*(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*=[ \t]*",
+                        line[:match.start("secret")],
+                    ):
+                        continue
                 group = "secret" if "secret" in rule.regex.groupindex else 0
                 value = match.group(group)
                 if not value or entropy(value) < rule.min_entropy:

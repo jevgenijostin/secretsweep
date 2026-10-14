@@ -92,6 +92,90 @@ def test_pem_variants(kind):
 def test_assignment_variants(name):
     assert any(f.severity == "HIGH" for f in scan_text(f'"{name}": "{MIX}"'))
 
+
+@pytest.mark.parametrize("name,pattern", [
+    ("DB_PASSWORD", "generic-password"),
+    ("MY_API_KEY", "generic-api-key"),
+    ("SOME_APP_SECRET_TOKEN", "generic-token"),
+    ("STRIPE_SECRET_KEY", "generic-secret"),
+    ("APP_AWS_SECRET_ACCESS_KEY", "aws-secret-key"),
+    ("PASSWORD2", "generic-password"),
+    ("APP2PASSWORD", "generic-password"),
+    ("API_KEY_BACKUP", "generic-api-key"),
+])
+@pytest.mark.parametrize("quote", ['"', "'", ""])
+def test_assignment_name_components(name, pattern, quote):
+    selected = next(r for r in FREE_RULES if r.name == pattern)
+    value = MIX + "aB3dE6gH"
+    found = scan_text(f'{name}={quote}{value}{quote}', "app.env", Config(rules=(selected,)))
+    assert len(found) == 1
+    assert found[0].pattern == pattern and found[0].severity == "HIGH"
+    assert found[0].snippet == redact(value)
+
+
+@pytest.mark.parametrize("name", ["passwordless", "mypasswordfield", "DB_PASSWORDLESS", "MYAPI_KEY", "secretary", "tokenizer"])
+def test_assignment_rejects_embedded_words(name):
+    assert not scan_text(f'{name}="Tr0ubador4HorseBattery"')
+
+
+@pytest.mark.parametrize("value", [
+    "GetCachedAuthTokenFromVault()", "GetCachedAuthTokenFromVault ()",
+    "GetCachedAuthTokenFromVault", "CachedAuthTokenFromVault2",
+    "vault.GetCachedAuthTokenFromVault()", "vault.CachedAuthTokenFromVault",
+    "CachedAuthTokenFromVault[index]", "CachedAuthTokenFromVault + other",
+])
+def test_source_assignment_references(value):
+    assert not scan_text(f"token = {value}", "fp.py")
+
+
+@pytest.mark.parametrize("file", [".env", ".env.local", "app.env", "dir\\.env", "<stdin>"])
+@pytest.mark.parametrize("line", [
+    "DB_PASSWORD=Tr0ubador4HorseBattery",
+    "export DB_PASSWORD = Tr0ubador4HorseBattery # comment",
+])
+def test_unquoted_env_assignments(file, line):
+    found = scan_text(line, file)
+    assert len(found) == 1 and found[0].pattern == "generic-password"
+
+
+@pytest.mark.parametrize("line", [
+    "token = GetCachedAuthTokenFromVault()",
+    "token = GetCachedAuthTokenFromVault ()",
+    "token = GetCachedAuthTokenFromVault[index]",
+    "token = GetCachedAuthTokenFromVault + other",
+    'token = "GetCachedAuthTokenFromVault\' ',
+    "token: GetCachedAuthTokenFromVault",
+    "obj.token=GetCachedAuthTokenFromVault",
+])
+def test_env_assignment_rejects_expressions(line):
+    assert not scan_text(line, ".env")
+
+
+@pytest.mark.parametrize("filename,source,pattern", [
+    ("leak2.env", 'DB_PASSWORD = "Tr0ubador4HorseBattery"\n', "generic-password"),
+    ("leak.env", 'MY_API_KEY = "abcdefghijklmnopqrstuvwxyz123456"\n', "generic-api-key"),
+    ("plain.env", "DB_PASSWORD=Tr0ubador4HorseBattery\n", "generic-password"),
+    ("fp.py", "token = GetCachedAuthTokenFromVault()\n", None),
+])
+def test_cli_assignment_regressions(tmp_path, capsys, filename, source, pattern):
+    path = tmp_path / filename
+    path.write_text(source, encoding="utf-8")
+    assert main(["scan", str(path), "--format", "json"]) == (1 if pattern else 0)
+    data = json.loads(capsys.readouterr().out)
+    assert data["summary"]["findings"] == (1 if pattern else 0)
+    assert data["summary"]["high"] == (1 if pattern else 0)
+    if pattern:
+        assert data["findings"][0]["pattern"] == pattern
+
+
+def test_diff_unquoted_assignment_uses_file_context():
+    diff = ("--- a/.env\n+++ b/.env\n@@ -0,0 +1 @@\n"
+            "+DB_PASSWORD=Tr0ubador4HorseBattery\n"
+            "--- a/fp.py\n+++ b/fp.py\n@@ -0,0 +1 @@\n"
+            "+token = CachedAuthTokenFromVault\n")
+    found = scan_stdin(diff)
+    assert len(found) == 1 and found[0].file == ".env"
+
 @pytest.mark.parametrize("value,expected", [("", 0), ("a", 0), ("aaaa", 0), ("ab", 1), ("abcd", 2), ("aabbccdd", 2), ("😀😁", 1)])
 def test_entropy(value, expected):
     assert entropy(value) == expected
